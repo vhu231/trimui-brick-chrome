@@ -197,8 +197,13 @@ export DEBIAN_FRONTEND=noninteractive
 chroot /opt/brick-chrome /usr/bin/apt-get install -y -qq \
   xserver-xorg-core xserver-xorg-video-fbdev xserver-xorg-input-evdev xinit xterm \
   python3-minimal python3-evdev python3-xlib python3-pil python3-websocket \
-  fonts-wqy-microhei fonts-wqy-zenhei alsa-utils
+  fonts-wqy-microhei fonts-wqy-zenhei alsa-utils dmz-cursor-theme
 chroot /opt/brick-chrome /usr/bin/apt-get clean
+
+# 白底黑边的鼠标指针。index.theme 是指向 /etc/alternatives 的符号链接，
+# 要用 update-alternatives 设置，直接覆盖那个链接会和以后的 apt 升级打架。
+chroot /opt/brick-chrome /usr/bin/update-alternatives \
+  --set x-cursor-theme /usr/share/icons/DMZ-White/cursor.theme
 df -h /
 SH
 ```
@@ -517,7 +522,35 @@ for (var i = event.resultIndex; i < event.results.length; i++)
 从结构上消除竞态。打完也**不要还原**成 NoSymbol —— 那是同一个竞态的反向版本，
 仍在队列里的按键会解析成"无符号"，末尾几个字会凭空消失。
 
-### 13. profile 会把 overlay 根分区撑满
+### 13. 这台机器上 Chrome 不可能有 GPU 加速
+
+值得先说清楚，省得再去试各种 `--use-gl=` 组合。
+
+GPU 是 **PowerVR**（`/sys/class/drm/card0/device/driver -> pvrsrvkm`），原厂也带了完整的
+用户态驱动（`libGLESv2.so`、`libsrv_um.so`、`libusc.so`），而且原厂是 glibc 2.33，
+理论上能被 chroot 里的 glibc 2.35 加载。但是：
+
+```
+/usr/lib/libpvrNULL_WSEGL.so     ← 全系统唯一的 WSEGL 模块
+```
+
+WSEGL 是 PowerVR 驱动决定"渲染结果往哪输出"的窗口系统绑定层。原厂只提供了 **NULL**
+一种 —— 没有 X11、没有 GBM、没有 Wayland，`libEGL.so` 里能找到的只有
+`IMGeglCreatePbufferSurface` 这类离屏接口。
+
+也就是说这颗 GPU 能算，但**没有任何办法把画面贴到 X11 窗口上**。Chrome 的 GPU 进程拿不到
+可呈现的 EGL surface，只能退回软件光栅化。硬走离屏渲染再读回来软件贴图，在 1024×768 下
+GPU→CPU 回读的开销通常比直接 CPU 光栅化还大。
+
+**原厂视频播放器流畅是另一条通路**：`/dev/cedar_dev`（Cedar 硬解码器）把帧直接送进
+`/dev/disp`（显示引擎的独立硬件图层），GPU 和 CPU 全程不参与合成。这条路是 Allwinner
+私有的，Chrome 用不了。
+
+所以页面性能的可调项只剩 CPU 侧：光栅化线程数、界面缩放（缩放 1 是 786k 像素/帧，
+缩放 1.5 只有 350k）。注意 `--enable-low-end-device-mode` 会把光栅化线程压到 1，
+在纯软件渲染下这是笔不划算的买卖。
+
+### 14. profile 会把 overlay 根分区撑满
 
 chroot 在 `/opt`，也就是 overlay 的上层分区，和原厂系统共用 1.9 GB。
 Chrome 的 profile 和缓存放在 chroot 里会一直长（实测 profile 140 MB + 缓存 86 MB），
@@ -525,7 +558,7 @@ Chrome 的 profile 和缓存放在 chroot 里会一直长（实测 profile 140 M
 
 搬到 `UDISK`（ext4，4.5 GB，原厂几乎没用）。不能搬 SD 卡 —— 那是 vfat。
 
-### 14. 高位 keycode 是浏览器功能键
+### 15. 高位 keycode 是浏览器功能键
 
 Chrome 判断快捷键看的是硬件 keycode 派生的 DomCode，**跟映射上去的 keysym 无关**。
 X keycode 166–180 对应 evdev 的 Back / Forward / Refresh，借用它们会直接让页面导航。

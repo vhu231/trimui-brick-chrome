@@ -290,6 +290,24 @@ def navigate(back):
 
 # ------------------------------------------------------------------ browser
 
+def set_root_cursor():
+    """A white pointer with a black outline on the root window.
+
+    Chrome draws its own from the Xcursor theme (DMZ-White); this covers
+    everything outside it, where the server's default is a black X that is hard
+    to see and easy to lose on this panel.  The cursor font's glyph and the
+    glyph after it are the shape and its mask, so foreground white over
+    background black gives white fill with a black edge."""
+    try:
+        font = xdisplay.open_font("cursor")
+        cursor = font.create_glyph_cursor(font, 68, 69,          # XC_left_ptr
+                                          (65535, 65535, 65535), (0, 0, 0))
+        root.change_attributes(cursor=cursor)
+        xdisplay.sync()
+    except Exception:
+        report("setting the root cursor")
+
+
 def browser_window():
     """Largest viewable top-level window belonging to Chrome."""
     best = None
@@ -419,6 +437,7 @@ buttons = {
     ecodes.BTN_THUMBR: lambda pressed: pressed and combo("Control_L", "l"),
 }
 
+set_root_cursor()
 keyboard.on_speech = start_speech
 keyboard.on_audio = toggle_audio
 
