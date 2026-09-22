@@ -17,6 +17,7 @@ from Xlib import X, XK, display
 from Xlib import error as xerror
 from Xlib.ext import xtest
 
+import brick_audio
 import brick_speech
 from brick_keyboard import OnScreenKeyboard, StatusBar
 from brick_typing import Typist
@@ -72,6 +73,12 @@ speech_results = queue.Queue()
 speech_release = threading.Event()
 speech_active = False
 speech_stopping = False
+audio_active = False
+audio_receiver = None
+try:
+    AUDIO_SECONDS = int(os.environ.get("BRICK_AUDIO_SECONDS", "15"))
+except ValueError:
+    AUDIO_SECONDS = 15
 menu_pressed_at = None
 status_until = 0.0
 
@@ -182,10 +189,48 @@ def finish_speech():
     status.show("识别中…", "请稍候")
 
 
+def _audio_worker(receiver, seconds):
+    """Record and demodulate off the main thread: capture alone takes seconds,
+    and the Goertzel pass is not free either."""
+    try:
+        speech_results.put(("audio-ok", receiver.receive(seconds)))
+    except brick_audio.AudioError as exc:
+        speech_results.put(("audio-err", str(exc)))
+    except Exception as exc:
+        speech_results.put(("audio-err", exc.__class__.__name__))
+
+
+def cancel_audio():
+    """Called from the main loop, so touching X here is fine."""
+    global audio_active
+    if not audio_active:
+        return
+    if audio_receiver is not None:
+        audio_receiver.cancel()
+    audio_active = False
+    status.show("已取消", "")
+    globals()["status_until"] = time.monotonic() + 1.2
+
+
+def toggle_audio():
+    global audio_active, audio_receiver, status_until
+    if audio_active:
+        cancel_audio()
+        return
+    if speech_active:
+        return
+    audio_active = True
+    status_until = 0.0
+    audio_receiver = brick_audio.Receiver()
+    status.show("等待声音…", "电脑扬声器对准掌机 · 再按一次取消")
+    threading.Thread(target=_audio_worker, args=(audio_receiver, AUDIO_SECONDS),
+                     daemon=True).start()
+
+
 def drain_speech(now):
     """Apply whatever the worker has reported; all X work happens here, on the
     main thread."""
-    global speech_active, speech_stopping, status_until
+    global speech_active, speech_stopping, audio_active, status_until
     while True:
         try:
             outcome, payload = speech_results.get_nowait()
@@ -195,7 +240,18 @@ def drain_speech(now):
         # let it paint "listening" over "recognising".
         if speech_stopping and outcome in ("live", "interim"):
             continue
-        if outcome == "live":
+        if outcome in ("audio-ok", "audio-err") and not audio_active:
+            continue          # cancelled; the late result is not interesting
+        if outcome == "audio-ok":
+            audio_active = False
+            status.show("正在输入…", payload[:24])
+            type_text(payload)
+            status_until = now + 0.6
+        elif outcome == "audio-err":
+            audio_active = False
+            status.show(payload[:14], payload[14:44] or "再试一次")
+            status_until = now + 2.5
+        elif outcome == "live":
             status.show("可以说话了", "说完松开 MENU")
         elif outcome == "interim":
             status.show("正在聆听…", payload[-24:])
@@ -329,6 +385,10 @@ def press_confirm(pressed):
 
 
 def press_cancel(pressed):
+    if audio_active:
+        if pressed:
+            cancel_audio()
+        return
     if speech_active:
         return
     if keyboard.visible:
@@ -360,6 +420,7 @@ buttons = {
 }
 
 keyboard.on_speech = start_speech
+keyboard.on_audio = toggle_audio
 
 
 def scaled(value):

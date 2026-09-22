@@ -32,6 +32,7 @@ RETURN = "\n"
 SHIFT = "\x01"
 CLOSE = "\x02"
 SPEECH = "\x03"
+AUDIO = "\x04"
 
 
 class Key:
@@ -67,9 +68,10 @@ def _layout():
         + _plain([("z", "Z"), ("x", "X"), ("c", "C"), ("v", "V"), ("b", "B"),
                   ("n", "N"), ("m", "M"), (".", ">"), ("/", "?")]),
         [Key("-", "_", "-", "_"), Key(":", ";", ":", ";"),
-         Key("空格", "空格", " ", " ", units=3),
+         Key("空格", "空格", " ", " ", units=2),
          Key(".com", ".com", ".com", ".com"),
          Key("语音", "语音", SPEECH, SPEECH),
+         Key("声波", "声波", AUDIO, AUDIO),
          Key("回车", "回车", RETURN, RETURN, units=2),
          Key("关闭", "关闭", CLOSE, CLOSE)],
     ]
@@ -116,6 +118,7 @@ class OnScreenKeyboard:
         self.window = None
         self.pixmaps = {}
         self.on_speech = None
+        self.on_audio = None
         self._showing_status = False
         self._measure()
 
@@ -311,6 +314,10 @@ class OnScreenKeyboard:
         if value == SPEECH:
             if self.on_speech is not None:
                 self.on_speech()
+            return True
+        if value == AUDIO:
+            if self.on_audio is not None:
+                self.on_audio()
             return True
         if value == BACKSPACE:
             send_keysym(XK.XK_BackSpace)

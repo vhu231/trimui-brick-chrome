@@ -33,6 +33,7 @@
 - 左摇杆当鼠标，A 键点击，方向键滚动/翻页
 - 屏幕键盘用**方向键选字母**，不用指针去戳
 - **按住 MENU 说话**，松开自动把识别结果输入到光标处（地址栏和网页输入框都行）
+- **声波输入**：电脑用扬声器把文本"念"过去，掌机用麦克风收下来解调再输入 —— 长网址不用一个字一个字戳
 - 中文显示正常，Chrome 界面为简体中文
 - 麦克风可用（网页 `getUserMedia` / 语音搜索）
 - 界面缩放、指针速度、首页都是文本文件配置，改完重启即可
@@ -323,6 +324,37 @@ echo "grep -a Chrome /tmp/log/messages | tail -5" | tools/brick-run -
 方向键接管键盘（不再滚动页面），A 按下选中的键，B 收起。
 布局：数字行 / qwerty / asdf + 退格 / 上档 + zxcv / 符号 + 空格 + `.com` + 语音 + 回车 + 关闭。
 
+### 声波输入
+
+选键盘上的「声波」键按 A，掌机开始录 15 秒；在电脑上运行发送端，把扬声器对准掌机：
+
+```bash
+./tools/audio-send.py "https://example.com/some/long/url"
+echo "文本" | ./tools/audio-send.py
+./tools/audio-send.py --volume 0.9 --repeat 3 "吵的环境"
+./tools/audio-send.py --save out.wav "写成文件而不是播放"
+```
+
+再按一次「声波」或按 B 可以取消，不用等录完。单帧最长 255 字节。
+
+调制是 **16 音 MFSK**（一个音 4 bit）加一个前导音。频率是挑过的，
+让每个音**正好落在接收端的 Goertzel 频点上**：
+
+```
+bin 宽度 = 16000 / 960 = 16.667 Hz
+1200 Hz -> bin 72     200 Hz 间隔 -> 12 bin     4400 Hz(前导) -> bin 264
+```
+
+全是整数，相邻音之间没有频谱泄漏，每个音一个 Goertzel 滤波器就够 —— 这台机器没有
+numpy，也不需要。帧格式 `前导×10 | 长度 | 数据 | CRC-8`；**CRC 是敢把它接到键盘上的前提**，
+听错的帧会被拒绝而不是把乱码打进去。
+
+`tools/audio-send.py` 直接 import 设备端的 `brick_audio.py` 做调制，两端共用同一份常量，
+协议不可能漂移。
+
+实测容限（48kHz 播放 → 抽取到 16kHz 模拟麦克风采样）：噪声 30%、时钟漂移 ±0.2% 均可解；
+设备上解码一帧约 1.1 秒。
+
 ### 语音输入
 
 按住 MENU 超过 0.35 秒开始，松开结束。顶部状态条会如实反映阶段：
@@ -525,6 +557,10 @@ sdcard/Apps/Chrome/            → 复制到掌机 /mnt/SDCARD/Apps/Chrome/
 tools/                         → 在宿主机上用
   brick-run                      在掌机上执行一段脚本
   brick-ssh.exp / brick-scp.exp  expect 包装，凭据从环境变量取
+  audio-send.py                  把文本调制成声音播给掌机
+
+sdcard/System/starts/           → 复制到掌机 /mnt/SDCARD/System/starts/
+  swap-udisk.sh                  开机在 UDISK 上启用 1GB swap
 ```
 
 ### 不包含的内容

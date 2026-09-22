@@ -26,13 +26,27 @@ chown brick:brick "$PROFILE" 2>/dev/null || true
 
 # --window-size is in logical pixels, so it has to be divided by the scale
 # factor for the window to come out at the panel's 1024x768.
+# Memory, not disk, is the binding constraint here: 975 MB of RAM against a
+# desktop Chrome.  Without these the browser swapped hard enough that kswapd sat
+# at 23% CPU with 29% iowait, and a second renderer could not even start -- V8
+# reported "Failed to reserve virtual memory for CodeRange" when mmap hit ENOMEM.
+#
+# Site isolation stays on deliberately.  Turning it off would save the most
+# memory, because it is what gives every distinct site its own process, but it
+# is also the boundary that keeps one site's data out of another site's process
+# -- the defence against Spectre-style cross-site reads.  The savings below come
+# from caches and process count instead.
 ARGS="--ozone-platform=x11
 --disable-gpu
 --disable-dev-shm-usage
 --password-store=basic
 --no-first-run
 --no-default-browser-check
---disable-features=Translate,MediaRouter
+--enable-low-end-device-mode
+--renderer-process-limit=2
+--process-per-site
+--disk-cache-size=67108864
+--disable-features=Translate,MediaRouter,BackForwardCache
 --lang=zh-CN
 --accept-lang=zh-CN,zh,en
 --alsa-input-device=hw:0,0
