@@ -1,0 +1,16 @@
+#!/usr/bin/expect -f
+# Copy one file to the Brick.  Credentials come from the environment.
+set timeout 900
+set host $env(BRICK_HOST)
+set pass $env(BRICK_PASS)
+set src [lindex $argv 0]
+set dst [lindex $argv 1]
+set known [expr {[info exists env(BRICK_KNOWN_HOSTS)] ? $env(BRICK_KNOWN_HOSTS) : "~/.ssh/known_hosts"}]
+spawn scp -o UserKnownHostsFile=$known -o StrictHostKeyChecking=yes \
+    -o PubkeyAuthentication=no -o PreferredAuthentications=password $src root@$host:$dst
+expect {
+    -re {[Pp]assword:} { send "$pass\r"; exp_continue }
+    eof
+}
+catch wait result
+exit [lindex $result 3]

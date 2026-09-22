@@ -1,0 +1,42 @@
+#!/bin/sh
+# Runs inside the /opt/brick-chrome chroot with DISPLAY already set.
+# launch.sh passes BRICK_SCALE / BRICK_WIN_W / BRICK_WIN_H; the fallbacks keep
+# this usable when started by hand.
+export LANG=C.UTF-8
+
+SCALE=${BRICK_SCALE:-1.5}
+WIN_W=${BRICK_WIN_W:-683}
+WIN_H=${BRICK_WIN_H:-512}
+
+# Chrome 136+ ignores --remote-debugging-port when the profile lives at the
+# default path, so the voice key needs the profile somewhere else.  Rename it
+# once rather than starting fresh, which would drop history, logins and the
+# microphone permissions already granted.
+PROFILE=/home/brick/.config/brick-profile
+DEFAULT=/home/brick/.config/google-chrome
+if [ ! -d "$PROFILE" ] && [ -d "$DEFAULT" ]; then
+    mv "$DEFAULT" "$PROFILE" && echo "migrated Chrome profile to $PROFILE"
+fi
+mkdir -p "$PROFILE"
+chown brick:brick "$PROFILE" 2>/dev/null || true
+
+# --window-size is in logical pixels, so it has to be divided by the scale
+# factor for the window to come out at the panel's 1024x768.
+ARGS="--ozone-platform=x11
+--disable-gpu
+--disable-dev-shm-usage
+--password-store=basic
+--no-first-run
+--no-default-browser-check
+--disable-features=Translate,MediaRouter
+--lang=zh-CN
+--accept-lang=zh-CN,zh,en
+--alsa-input-device=hw:0,0
+--user-data-dir=$PROFILE
+--remote-debugging-port=9222
+--force-device-scale-factor=$SCALE
+--window-position=0,0
+--window-size=$WIN_W,$WIN_H"
+
+exec /usr/bin/su -s /bin/sh brick -c \
+    "exec /usr/bin/google-chrome-stable $(echo $ARGS) \"\$@\"" _ "$@"

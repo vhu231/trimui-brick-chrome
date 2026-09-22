@@ -1,0 +1,33 @@
+# --- credentials and device-specific identity: never commit ---
+*hostkey*
+*known_hosts*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.netrc
+secrets*
+brick-ssh.exp.local
+brick-scp.exp.local
+*.local
+
+# --- third-party binaries: fetch them yourself, see README ---
+*.deb
+*.tar.gz
+*.tar.xz
+*.zip
+*.img
+# anchored: a bare "chrome" also matches the sdcard/Apps/Chrome/ directory on
+# case-insensitive filesystems
+/chrome
+icon.png
+product_logo_*.png
+SHA256SUMS
+
+# --- runtime state and scratch ---
+*.log
+*.wav
+*.raw
+__pycache__/
+*.pyc
+.DS_Store

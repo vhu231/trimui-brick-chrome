@@ -1,0 +1,8 @@
+{
+"label":"Chrome",
+"label.ch.lang":"Chrome 浏览器",
+"icon":"",
+"icontop":"icon.png",
+"launch":"launch.sh",
+"description":"Google Chrome (X11/chroot)"
+}

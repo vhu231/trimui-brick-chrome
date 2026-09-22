@@ -1,0 +1,19 @@
+#!/usr/bin/expect -f
+# Run a base64-encoded shell script on the Brick.
+#   BRICK_HOST=<device-ip> BRICK_PASS=<password> brick-run - <<SH ... SH
+# Credentials come from the environment; nothing is baked in.
+set timeout 600
+set host $env(BRICK_HOST)
+set pass $env(BRICK_PASS)
+set b64 [lindex $argv 0]
+set tmp [lindex $argv 1]
+set known [expr {[info exists env(BRICK_KNOWN_HOSTS)] ? $env(BRICK_KNOWN_HOSTS) : "~/.ssh/known_hosts"}]
+spawn ssh -o UserKnownHostsFile=$known -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+    -o PubkeyAuthentication=no -o PreferredAuthentications=password \
+    root@$host "echo $b64 | base64 -d > $tmp; sh $tmp; rc=\$?; rm -f $tmp; exit \$rc"
+expect {
+    -re {[Pp]assword:} { send "$pass\r"; exp_continue }
+    eof
+}
+catch wait result
+exit [lindex $result 3]

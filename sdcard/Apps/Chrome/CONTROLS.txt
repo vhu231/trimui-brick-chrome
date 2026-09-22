@@ -1,0 +1,77 @@
+Chrome on TRIMUI Brick — 手柄操作
+=================================
+机身是任天堂布局（A 在右、B 在下、X 在上、Y 在左），下表按机身丝印。
+
+【浏览网页时】
+左摇杆        移动鼠标指针
+A（右）       左键点击 / 确认
+Y（左）       右键点击
+B（下）       Esc（取消 / 关闭弹窗）
+X（上）       退格 BackSpace
+START         回车
+SELECT        Tab
+L1 / R1       上一页 / 下一页
+方向键 上下    滚动页面
+方向键 左右    浏览器 后退 / 前进
+右摇杆 上下    滚动页面
+L2 / R2       缩小 / 放大
+右摇杆按下     跳到地址栏
+左摇杆按下     刷新
+MENU          打开 / 收起屏幕键盘
+SELECT+START  退出 Chrome，返回原厂界面
+
+【屏幕键盘打开时】方向键接管键盘，不再滚动页面
+方向键        移动选中的按键（上下按横向位置对齐，左右在行内循环）
+A（右）       按下选中的按键
+B（下）       收起键盘
+MENU          收起键盘
+右摇杆 上下    仍可滚动页面
+上档           切换大写 / 符号（按一次锁定，再按取消）
+关闭           收起键盘
+
+键盘布局：
+  数字行
+  qwerty
+  asdf... + 退格
+  上档 + zxcv...
+  - : 空格 .com 语音 回车 关闭
+
+【语音输入】按住 MENU 说话，键盘开着关着都一样
+按住 MENU 超过 0.35 秒开始，松开结束，文字自动输入到当前光标处
+（地址栏和网页输入框都可以）。键盘上的「语音」键也能触发，用 A 结束。
+
+屏幕顶部的状态条只在真正就绪后才叫你说话：
+  等待中…    正在连接 Chrome、启动识别引擎（通常不到半秒）
+  可以说话了  引擎已开始采集音频（onaudiostart / onstart），这时再开口
+  正在聆听…  下面实时显示已经识别到的文字
+  识别中…    已松开 MENU，正在等最后一段结果
+  正在输入…  往光标处输入
+
+识别语言默认简体中文，改的话给 brick-pad 设环境变量 BRICK_SPEECH_LANG，
+例如 BRICK_SPEECH_LANG=en-US。
+
+识别是连续模式（continuous），整段话都会被收下；默认的非连续模式
+在第一次停顿就会结束，只能识别开头一句。
+
+原理：识别用的是 Chrome 自带的 Web Speech API，由 brick-pad 通过 Chrome
+的调试接口（127.0.0.1:9222，仅本机）驱动，再把结果用 XTEST 输入。
+中文没法直接用键码发送，是临时把一个空闲 keycode 映射到对应的 Unicode
+keysym 再按下（xdotool 的做法）。
+
+注意：
+- 每个网站第一次用语音，Chrome 会弹麦克风授权框，用 A 允许即可。
+- 需要网页是 https（Web Speech API 要求安全上下文）。
+- 启动参数里开了 --remote-debugging-port=9222。它只监听本机回环地址，
+  但确实意味着掌机上任何本地进程都能操控 Chrome。不想要就去
+  /opt/brick-chrome/usr/local/bin/brick-chrome-start 里删掉这一行，
+  删掉后语音功能会失效。
+
+【麦克风】
+chroot 内的 brick 用户已加入 audio 组；采集走 ALSA hw:0,0
+（不能用 default，它的 plug 链在 48kHz 单声道上会失败，正是 Chrome 要的格式）。
+
+【其它】
+中文显示：chroot 内已装 文泉驿正黑 / 微米黑，Chrome 界面语言为简体中文。
+首页地址：编辑 /mnt/SDCARD/Apps/Chrome/homepage.txt，第一行写网址。
+运行日志：/opt/brick-chrome/tmp/brick-app.log
+          /opt/brick-chrome/tmp/brick-pad.log（手柄/键盘/语音的报错）

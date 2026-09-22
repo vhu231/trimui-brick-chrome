@@ -1,0 +1,13 @@
+#!/bin/sh
+# usage: BRICK_HOST=... BRICK_PASS=... ./brick-run - <<'SH' ... SH
+# Each call gets its own remote script file: overlapping invocations would
+# otherwise truncate a script another session is still reading.
+set -e
+: "${BRICK_HOST:?set BRICK_HOST}" "${BRICK_PASS:?set BRICK_PASS}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [ "${1:-}" = "-" ] || [ -z "${1:-}" ]; then
+  B64=$(base64 | tr -d '\n')
+else
+  B64=$(base64 < "$1" | tr -d '\n')
+fi
+exec "$HERE/brick-ssh.exp" "$B64" "/tmp/.brickcmd.$$.$(date +%s).sh"
