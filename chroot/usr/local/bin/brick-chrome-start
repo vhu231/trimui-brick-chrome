@@ -36,9 +36,34 @@ chown brick:brick "$PROFILE" 2>/dev/null || true
 # is also the boundary that keeps one site's data out of another site's process
 # -- the defence against Spectre-style cross-site reads.  The savings below come
 # from caches and process count instead.
+#
+# brick-x11.sh puts a tmpfs behind /dev/shm.  Fall back to /tmp only when it is
+# missing: Chrome backs its shared memory with files, and /tmp is on the eMMC.
+SHM=
+grep -q ' /tmp/shm tmpfs ' /proc/mounts || SHM=--disable-dev-shm-usage
+
+# GPU (BRICK_GPU=1, from gpu.txt): Skia rasterises and composites through the
+# stock PowerVR Vulkan driver, and WebGL runs on ANGLE sharing the same device
+# (VulkanFromANGLE).  The driver cannot present to X11; VK_LAYER_BRICK_x11_wsi
+# supplies the swapchain, and the brickext Xorg module is what lets Chrome ask
+# for one.  Measured against --disable-gpu on the device: scrolling the same
+# 60 fps, CSS animation 26 fps instead of 5.6, canvas 41 instead of 27, and
+# WebGL only exists here -- for roughly 30-60 MB more memory.
+if [ "${BRICK_GPU:-1}" = 1 ]; then
+    GPU="--enable-features=Vulkan,VulkanFromANGLE
+--use-vulkan=native
+--use-angle=vulkan
+--ignore-gpu-blocklist
+--enable-gpu-rasterization"
+    VKENV="BRICK_VK_X11_WSI=1 ${BRICK_WSI_DEBUG:+BRICK_WSI_DEBUG=$BRICK_WSI_DEBUG}"
+else
+    GPU=--disable-gpu
+    VKENV=
+fi
+
 ARGS="--ozone-platform=x11
---disable-gpu
---disable-dev-shm-usage
+$GPU
+$SHM
 --password-store=basic
 --no-first-run
 --no-default-browser-check
@@ -64,4 +89,4 @@ ARGS="--ozone-platform=x11
 CURSOR="XCURSOR_THEME=DMZ-White XCURSOR_SIZE=${BRICK_CURSOR_SIZE:-48}"
 
 exec /usr/bin/su -s /bin/sh brick -c \
-    "exec env $CURSOR /usr/bin/google-chrome-stable $(echo $ARGS) \"\$@\"" _ "$@"
+    "exec env $CURSOR $VKENV /usr/bin/google-chrome-stable $(echo $ARGS) \"\$@\"" _ "$@"

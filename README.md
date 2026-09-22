@@ -30,6 +30,8 @@
 ## 能做什么
 
 - 在掌机屏幕上跑完整的桌面版 Chrome（不是 WebView，不是精简浏览器）
+- **GPU 加速**：光栅化、合成和 WebGL 都跑在原厂 PowerVR 的 Vulkan 驱动上 ——
+  滚动满 60 帧，CSS 动画是纯 CPU 渲染的 4.6 倍，WebGL / WebGPU 可用
 - 左摇杆当鼠标，A 键点击，方向键滚动/翻页
 - 屏幕键盘用**方向键选字母**，不用指针去戳
 - **按住 MENU 说话**，松开自动把识别结果输入到光标处（地址栏和网页输入框都行）
@@ -46,7 +48,8 @@
 |---|---|
 | 设备 | TRIMUI Brick Pro / TG4040 |
 | 系统 | 原厂 Tina Linux（未 root 改造，仅用 SSH） |
-| CPU | 4 × ARM Cortex-A53 (aarch64) |
+| CPU | 4 × ARM Cortex-A53 (aarch64)，408 MHz – 2 GHz |
+| GPU | PowerVR Rogue GE8300，原厂带 Vulkan 1.3 驱动（Rogue DDK 1.19） |
 | 内存 | 约 975 MB |
 | 屏幕 | 1024 × 768，约 3.2 吋（≈400 PPI） |
 | 帧缓冲 | `/dev/fb0`，1024×768，32bpp，stride 4096 |
@@ -90,7 +93,9 @@ root 密码用原厂默认值 —— 这是 Allwinner Tina Linux 的出厂默认
 │    └─ /mnt/SDCARD/Apps/Chrome/launch.sh                      │
 │         └─ /opt/brick-chrome/brick-x11.sh                    │
 │              ├─ bind mount /proc /sys /dev /dev/pts 进 chroot │
-│              ├─ Xorg :1  (fbdev → /dev/fb0)                  │
+│              ├─ tmpfs → /dev/shm；原厂 /usr/lib 只读挂入     │
+│              ├─ 4 个 CPU 核全开、调速器调快（退出还原）      │
+│              ├─ Xorg :1  (fbdev → /dev/fb0, +brickext)       │
 │              ├─ brick-pad.py  手柄 → X11 指针/按键            │
 │              └─ chroot 里启动 Chrome                          │
 │                                                              │
@@ -103,6 +108,24 @@ Chrome 退出后脚本返回，`runtrimui.sh` 循环重新拉起 MainUI，屏幕
 `brick-pad.py` 是整套东西的中枢：读 evdev 手柄事件，用 XTEST 合成 X11 的指针和按键，
 管理屏幕键盘覆盖层和语音状态条，并且因为没有窗口管理器，它还负责把输入焦点钉在
 Chrome 窗口上。
+
+### GPU 渲染路径
+
+```
+Chrome GPU 进程
+  ├─ Skia on Vulkan：光栅化 + 合成
+  └─ ANGLE on Vulkan：WebGL（与 Skia 共用同一个 VkDevice）
+       │
+       ▼  VK_LAYER_BRICK_x11_wsi（vk-shim/）：驱动没有的 X11 swapchain
+       │    vkQueuePresentKHR：GPU 把脏矩形拷进 host-cached 缓冲区，立即返回
+       │    后台线程：等 fence → 拷进 MIT-SHM 段 → xcb_shm_put_image
+       ▼
+  PowerVR Vulkan 驱动（原厂 /usr/lib/libVK_IMG.so，只读挂进 chroot）
+```
+
+驱动能渲染但不能往 X11 窗口呈现，这一段由自己写的 Vulkan 层补上；
+Chrome 只在 X 服务器"看起来"支持 Vulkan 表面时才会用 swapchain，
+这由一个只注册扩展名的 Xorg 模块（`brickext`）解决。细节见[踩过的坑 13](#13-gpu-加速驱动有-vulkan缺的是往-x11-呈现)。
 
 ---
 
@@ -219,6 +242,9 @@ tools/brick-scp.exp chroot/etc/X11/xorg.conf /opt/brick-chrome/etc/X11/xorg.conf
 `AutoAddDevices false` —— 手柄不交给 Xorg，由 `brick-pad.py` 自己读 evdev 再用 XTEST 合成，
 这样才能做出摇杆加速曲线、屏幕键盘和语音这些逻辑。
 
+`ShadowFB false` 见[坑 18](#18-fbdev-的影子帧缓冲让-xorg-吃掉-70-一个核)；`Load "brickext"` 是第 9 步装的模块，
+还没装时 Xorg 只会在日志里报一行找不到模块，照常启动。
+
 ### 6. 装 Chrome
 
 ```bash
@@ -257,7 +283,7 @@ SH
 
 ```bash
 tools/brick-scp.exp chroot/brick-x11.sh                       /opt/brick-chrome/brick-x11.sh
-for f in brick-chrome-start brick-pad.py brick_keyboard.py brick_speech.py brick_typing.py; do
+for f in brick-chrome-start brick-pad.py brick_audio.py brick_keyboard.py brick_speech.py brick_typing.py; do
   tools/brick-scp.exp "chroot/usr/local/bin/$f" "/opt/brick-chrome/usr/local/bin/$f"
 done
 
@@ -268,7 +294,54 @@ chmod +x /opt/brick-chrome/brick-x11.sh \
 SH
 ```
 
-### 9. 加到原厂应用列表
+### 9. GPU 加速（Vulkan）
+
+`vk-shim/` 里带着编译好的 Vulkan 层和 Xorg 模块（`libVkLayer_brick_x11_wsi.so`、
+`libbrickext.so`，都只依赖 glibc）。改了源码才需要重新编译：在宿主机上用
+[zig](https://ziglang.org/download/)（官方独立包，解压即用，自带 clang、lld 和 glibc 桩）
+加 Vulkan 头文件（`brew install vulkan-headers`，或用 `VULKAN_INCLUDE` 指向一份 Vulkan-Headers）：
+
+```bash
+ZIG=/path/to/zig vk-shim/build.sh
+```
+
+```bash
+tools/brick-run - <<'SH'
+R=/opt/brick-chrome
+mkdir -p $R/opt/pvr/lib $R/opt/tina-usr-lib $R/usr/lib/xorg/modules/extensions \
+         $R/usr/share/vulkan/icd.d $R/usr/share/vulkan/implicit_layer.d
+SH
+
+tools/brick-scp.exp vk-shim/libVkLayer_brick_x11_wsi.so /opt/brick-chrome/opt/pvr/lib/libVkLayer_brick_x11_wsi.so
+tools/brick-scp.exp vk-shim/libbrickext.so /opt/brick-chrome/usr/lib/xorg/modules/extensions/libbrickext.so
+for f in usr/share/vulkan/icd.d/powervr_icd.json \
+         usr/share/vulkan/implicit_layer.d/brick_x11_wsi.json \
+         etc/ld.so.conf.d/powervr.conf; do
+  tools/brick-scp.exp "chroot/$f" "/opt/brick-chrome/$f"
+done
+
+tools/brick-run - <<'SH'
+R=/opt/brick-chrome
+# 用户态驱动和内核模块版本锁死，所以不复制，而是把原厂 /usr/lib 只读挂进来再链接
+# （brick-x11.sh 每次启动也会挂）。只链驱动要的 4 个库，免得 ldconfig 把原厂的
+# libEGL 之类排到 Ubuntu 的前面。
+grep -q " $R/opt/tina-usr-lib " /proc/mounts || {
+  mount -o bind /usr/lib $R/opt/tina-usr-lib && mount -o remount,bind,ro $R/opt/tina-usr-lib; }
+for f in libVK_IMG.so libsrv_um.so libusc.so libufwriter.so; do
+  ln -sfn ../../tina-usr-lib/$f $R/opt/pvr/lib/$f
+done
+ln -sfn libVK_IMG.so $R/opt/pvr/lib/libVK_IMG.so.1
+chroot $R /sbin/ldconfig
+
+# 可选：确认驱动可用，应该看到 PowerVR Rogue GE8300
+chroot $R /usr/bin/apt-get install -y -qq vulkan-tools
+chroot $R /usr/bin/vulkaninfo --summary | grep -E 'deviceName|apiVersion'
+SH
+```
+
+做完这步 `gpu.txt`（默认 `1`）才有意义；跳过的话把它改成 `0`，Chrome 会用纯 CPU 渲染。
+
+### 10. 加到原厂应用列表
 
 ```bash
 tools/brick-run - <<'SH'
@@ -277,7 +350,7 @@ mkdir -p /mnt/SDCARD/Apps/Chrome
 cp /opt/brick-chrome/opt/google/chrome/product_logo_256.png /mnt/SDCARD/Apps/Chrome/icon.png
 SH
 
-for f in config.json launch.sh CONTROLS.txt scale.txt pointer.txt homepage.txt; do
+for f in config.json launch.sh CONTROLS.txt scale.txt pointer.txt homepage.txt gpu.txt; do
   tools/brick-scp.exp "sdcard/Apps/Chrome/$f" "/mnt/SDCARD/Apps/Chrome/$f"
 done
 
@@ -385,6 +458,7 @@ numpy，也不需要。帧格式 `前导×10 | 长度 | 数据 | CRC-8`；**CRC 
 | `homepage.txt` | 首页网址（第一行） | `https://www.bing.com` |
 | `scale.txt` | 界面缩放，`1` = 100%、`1.5` = 150% | `1` |
 | `pointer.txt` | 指针峰值速度（像素/帧，50 帧/秒） | `12` |
+| `gpu.txt` | GPU 加速，`1` 开、`0` 关（纯 CPU 渲染） | `1` |
 
 缩放对应的可用空间：
 
@@ -411,6 +485,24 @@ numpy，也不需要。帧格式 `前导×10 | 长度 | 数据 | CRC-8`；**CRC 
 | 手柄没反应、指针不动 | `/opt/brick-chrome/tmp/brick-pad.log`（有异常会写 traceback） |
 | X11 起不来 | `/opt/brick-chrome/tmp/brick-xorg.log` |
 | 语音报错 | 状态条会显示原因；详细日志在 `brick-pad.log` |
+| 画面花屏、卡死、GPU 进程反复重启 | 先把 `gpu.txt` 改成 `0` 确认是不是 GPU 路径的问题；再看 `brick-app.log` |
+| GPU 模式很慢，像没开 | `brick-xorg.log` 里要有 `LoadModule: "brickext"`，否则 Chrome 退回逐帧同步回读 |
+| 想看呈现统计 | 在 `/tmp/cmd_to_run.sh` 里 `export BRICK_WSI_DEBUG=1`，层每 2 秒往 `brick-app.log` 写一行帧率和各阶段耗时 |
+
+测 GPU 状态和帧率（`tools/bench/`，在 chroot 里跑，连 Chrome 的 9222 调试端口）：
+
+```bash
+tools/brick-run - <<'SH'
+mkdir -p /opt/brick-chrome/home/brick/bench
+SH
+for f in tools/bench/*; do tools/brick-scp.exp "$f" "/opt/brick-chrome/home/brick/bench/${f##*/}"; done
+
+tools/brick-run - <<'SH'
+B="chroot /opt/brick-chrome /usr/bin/python3 /home/brick/bench/cdp.py 9222"
+$B gpu
+for p in scroll anim canvas webgl; do $B bench file:///home/brick/bench/$p.html 8; done
+SH
+```
 
 手柄进程崩了不用重启整机，可以直接接回去：
 
@@ -522,33 +614,63 @@ for (var i = event.resultIndex; i < event.results.length; i++)
 从结构上消除竞态。打完也**不要还原**成 NoSymbol —— 那是同一个竞态的反向版本，
 仍在队列里的按键会解析成"无符号"，末尾几个字会凭空消失。
 
-### 13. 这台机器上 Chrome 不可能有 GPU 加速
+### 13. GPU 加速：驱动有 Vulkan，缺的是往 X11 呈现
 
-值得先说清楚，省得再去试各种 `--use-gl=` 组合。
-
-GPU 是 **PowerVR**（`/sys/class/drm/card0/device/driver -> pvrsrvkm`），原厂也带了完整的
-用户态驱动（`libGLESv2.so`、`libsrv_um.so`、`libusc.so`），而且原厂是 glibc 2.33，
-理论上能被 chroot 里的 glibc 2.35 加载。但是：
+这一条以前的结论是"不可能"，因为只看了 EGL：原厂唯一的 WSEGL 模块是 `libpvrNULL_WSEGL.so`，
+EGL 只能离屏。但原厂同时带了 **`libVK_IMG.so`** —— 一个完整的 Vulkan 驱动：
 
 ```
-/usr/lib/libpvrNULL_WSEGL.so     ← 全系统唯一的 WSEGL 模块
+deviceName         = PowerVR Rogue GE8300
+apiVersion         = 1.3.225
+conformanceVersion = 1.3.3.1
 ```
 
-WSEGL 是 PowerVR 驱动决定"渲染结果往哪输出"的窗口系统绑定层。原厂只提供了 **NULL**
-一种 —— 没有 X11、没有 GBM、没有 Wayland，`libEGL.so` 里能找到的只有
-`IMGeglCreatePbufferSurface` 这类离屏接口。
+Chrome 要的 `VK_KHR_external_memory_fd`、`VK_KHR_external_semaphore_fd`、
+`VK_EXT_external_memory_dma_buf` 它都有，而且普通用户就能用（只开 `/dev/dri/renderD128`，本来就是 666）。
+它的 WSI 只有 `VK_KHR_display` 和 `VK_EXT_headless_surface` —— 能渲染，不能往 X11 窗口呈现。
+从这里到能用，一路四道坎：
 
-也就是说这颗 GPU 能算，但**没有任何办法把画面贴到 X11 窗口上**。Chrome 的 GPU 进程拿不到
-可呈现的 EGL surface，只能退回软件光栅化。硬走离屏渲染再读回来软件贴图，在 1024×768 下
-GPU→CPU 回读的开销通常比直接 CPU 光栅化还大。
+1. **原生 GLES 过不了互操作检查**：Chrome 用 Vulkan 合成时，GL 那边必须同时有
+   `GL_EXT_memory_object_fd` 和 `GL_EXT_semaphore_fd`，PowerVR 的 GLES 缺后者。所以 GL 也得走 ANGLE on Vulkan。
+2. **ANGLE 在 X11 上强制要 `VK_KHR_xcb_surface`**，没有它连 EGL display 都初始化不了。
+3. **Chrome 在 X11 上的"无 WSI"兜底路径是同步的**：`SkiaOutputDeviceX11` 每帧 `readPixels`
+   等 GPU 做完，再用普通 `XPutImage` 经 socket 传整帧（源码里就写着 `TODO: Switch to XShmPutImage`）。
+   trace 里 GPU 进程每帧在这上面耗 34.7 ms，全屏滚动只有 24 fps，比纯 CPU 渲染还慢一半。
+4. **Chrome 只在 X 服务器有 `DRI3`、`NV-CONTROL` 或 `ATIFGLRXDRI` 扩展时才用 Vulkan swapchain**
+   （`ui::IsVulkanSurfaceSupported`），fbdev 的 Xorg 一个都没有。
 
-**原厂视频播放器流畅是另一条通路**：`/dev/cedar_dev`（Cedar 硬解码器）把帧直接送进
-`/dev/disp`（显示引擎的独立硬件图层），GPU 和 CPU 全程不参与合成。这条路是 Allwinner
-私有的，Chrome 用不了。
+`vk-shim/` 里的两个小东西解决后两道：
 
-所以页面性能的可调项只剩 CPU 侧：光栅化线程数、界面缩放（缩放 1 是 786k 像素/帧，
-缩放 1.5 只有 350k）。注意 `--enable-low-end-device-mode` 会把光栅化线程压到 1，
-在纯软件渲染下这是笔不划算的买卖。
+- **`VK_LAYER_BRICK_x11_wsi`**（隐式 Vulkan 层，只在 `BRICK_VK_X11_WSI=1` 时启用）自己实现
+  `VK_KHR_xcb_surface` 和 swapchain。present 时在应用自己的队列上把**脏矩形**（层顺带提供
+  `VK_KHR_incremental_present`）拷进 host-cached 缓冲区就返回；后台线程等 fence、
+  拷进 MIT-SHM 段（顺手把 alpha 置 255，见坑 3）、`xcb_shm_put_image`。
+  GPU 渲染下一帧和 CPU 送出上一帧并行，渲染线程上没有任何回读等待。
+- **`brickext` Xorg 模块**只注册一个空的 `ATIFGLRXDRI` 扩展名。那是 AMD 早已停更的 fglrx
+  驱动的名字，Chromium 里只有上面那一处看它，所以只打开了这一条代码路径，
+  也不用改 Chrome 的二进制，Chrome 升级不受影响。
+
+还有一处隐蔽的：**ANGLE 会按优先级申请 min(队列数, 3) 个队列**，驱动只有 2 个，全被它拿走；
+而 acquire 必须替应用给信号量发信号，又不能碰应用的队列（Vulkan 队列要求外部同步）。
+所以层对应用只报告 1 个队列，自己在 `vkCreateDevice` 时多要一个，专门用来发信号。
+
+真机实测（4 核，同一组测试页，预热后，见 `tools/bench/`）：
+
+| | 纯 CPU（`gpu.txt` = 0） | GPU（默认） |
+|---|---|---|
+| 全屏滚动 | 59.9 fps | 59.0 fps |
+| 80 个旋转缩放元素的 CSS 动画 | 5.6 fps | **26.0 fps** |
+| 2D canvas，每帧 600 个半透明圆 | 27.0 fps | **41.4 fps** |
+| WebGL，4 万个点 | 不可用 | **16.8 fps** |
+
+代价是多用 30–60 MB 内存。WebGL 那一项靠 `VulkanFromANGLE`：让 Skia 和 ANGLE 共用一个
+VkDevice，省掉两个设备之间每帧的同步，从 10 fps 提到 17 fps。
+
+**视频硬解仍然用不上**：原厂播放器流畅走的是 `/dev/cedar_dev`（Cedar 硬解码器）直接把帧送进
+`/dev/disp` 的独立硬件图层，这条路是 Allwinner 私有的，Chrome 用不了，视频只能软解。
+
+纯 CPU 模式下的可调项：光栅化线程数、界面缩放（缩放 1 是 786k 像素/帧，缩放 1.5 只有 350k）。
+注意 `--enable-low-end-device-mode` 会把光栅化线程压到 1。
 
 ### 14. profile 会把 overlay 根分区撑满
 
@@ -566,31 +688,68 @@ X keycode 166–180 对应 evdev 的 Back / Forward / Refresh，借用它们会�
 `brick_typing.py` 里那份 45 个 keycode 的名单是**实测筛出来的**：逐个映射成已知字符、
 打进页面、核对字符正确且页面没跳转。114 / 119 / 166 / 167 被剔除（吞按键不产生字符）。
 
+### 16. 一半的 CPU 核是关着的，调速器 2 秒才看一次负载
+
+原厂不统一管 CPU：各个模拟器的启动脚本自己往 `/sys/devices/system/cpu/cpu{2,3}/online`
+写 0 或 1，**没人负责写回去**，实测时掌机上只有 2 个核在线。`ondemand` 的采样周期更离谱：
+`cpufreq-dt` 报告 2 ms 的切换延迟，4.9 内核的 ondemand 把它乘以 1000 当默认采样周期 ——
+**2 秒**，阈值还是 95%。浏览器那种几百毫秒的突发负载基本全跑在低频上。
+
+`brick-x11.sh` 启动时打开 4 个核，ondemand 改成 40 ms 采样（内核允许的下限）、70% 阈值，
+退出时原样恢复。纯 CPU 模式下全屏滚动的 p95 帧间隔从 33 ms 降到 16.8 ms（一帧不掉），
+CPU 占用反而从 90% 降到 50%。
+
+### 17. chroot 里的 /dev/shm 落在 eMMC 上
+
+主机的 `/dev/shm` 是指向 `/tmp/shm` 的符号链接，bind mount 进 chroot 以后解析成
+**chroot 自己的 `/tmp`** —— 在 overlay 根分区上，而原厂把所有可写分区都以 `sync` 挂载。
+Chrome 153 的共享内存仍然是 `/dev/shm` 下的文件，目录不存在时直接 `FATAL`；以前靠
+`--disable-dev-shm-usage` 让它改用 `/tmp`，于是渲染进程和浏览器之间传的每块缓冲区都在 eMMC 上。
+现在 `brick-x11.sh` 在 chroot 的 `/tmp/shm` 挂一个 tmpfs。
+
+### 18. fbdev 的影子帧缓冲让 Xorg 吃掉 70% 一个核
+
+fbdev 驱动默认开 ShadowFB：X 先画进内存里的影子，再把脏区域拷进 `/dev/fb0`。
+每帧全屏更新就是两次整帧拷贝，滚动时 Xorg 占 70% 一个核，关掉以后 8%。
+影子帧缓冲是给需要从屏幕读回像素的操作准备的，这里没有这种操作。
+
 ---
 
 ## 仓库内容
 
 ```
 chroot/                        → 复制到掌机 /opt/brick-chrome/
-  brick-x11.sh                   启动 Xorg + 手柄守护 + 目标程序
-  etc/X11/xorg.conf              fbdev 配置
+  brick-x11.sh                   挂载、CPU 设置、启动 Xorg + 手柄守护 + 目标程序
+  etc/X11/xorg.conf              fbdev 配置（关 ShadowFB，加载 brickext）
+  etc/ld.so.conf.d/powervr.conf  让 chroot 找到原厂驱动的依赖库
+  usr/share/vulkan/
+    icd.d/powervr_icd.json       原厂 PowerVR Vulkan 驱动
+    implicit_layer.d/brick_x11_wsi.json  WSI 层清单
   usr/local/bin/
     brick-chrome-start           Chrome 启动参数、profile 迁移
     brick-pad.py                 手柄 → X11，主循环
+    brick_audio.py               声波输入的调制解调
     brick_keyboard.py            屏幕键盘 + 顶部状态条
     brick_speech.py              CDP 驱动 Web Speech API
     brick_typing.py              XTEST 文本注入（含 Unicode）
+
+vk-shim/                       → .so 复制到掌机；改了源码用 build.sh（需要 zig）重编
+  brick_x11_wsi.c                Vulkan 层：X11 surface + swapchain（异步回读 + MIT-SHM）
+  brick_xext.c                   Xorg 模块：空的 ATIFGLRXDRI 扩展
+  libVkLayer_brick_x11_wsi.so    编译好的 Vulkan 层 → /opt/brick-chrome/opt/pvr/lib/
+  libbrickext.so                 编译好的 Xorg 模块 → /opt/brick-chrome/usr/lib/xorg/modules/extensions/
 
 sdcard/Apps/Chrome/            → 复制到掌机 /mnt/SDCARD/Apps/Chrome/
   config.json                    原厂启动器的应用描述
   launch.sh                      应用入口，读配置并调用 brick-x11.sh
   CONTROLS.txt                   设备上的操作速查
-  scale.txt / pointer.txt / homepage.txt
+  scale.txt / pointer.txt / homepage.txt / gpu.txt
 
 tools/                         → 在宿主机上用
   brick-run                      在掌机上执行一段脚本
   brick-ssh.exp / brick-scp.exp  expect 包装，凭据从环境变量取
   audio-send.py                  把文本调制成声音播给掌机
+  bench/                         性能测试页和 CDP 脚本（README 里的帧率都出自它）
 
 sdcard/System/starts/           → 复制到掌机 /mnt/SDCARD/System/starts/
   swap-udisk.sh                  开机在 UDISK 上启用 1GB swap

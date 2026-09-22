@@ -25,6 +25,11 @@ POINTER=12
 [ -f "$HERE/pointer.txt" ] && POINTER=$(head -n 1 "$HERE/pointer.txt" | tr -dc '0-9.')
 case "$POINTER" in ''|.|*.*.*) POINTER=12 ;; esac
 
+# GPU rendering through the PowerVR Vulkan driver: 1 = on (default), 0 = off.
+GPU=1
+[ -f "$HERE/gpu.txt" ] && GPU=$(head -n 1 "$HERE/gpu.txt" | tr -dc '0-9')
+
+export BRICK_GPU="${GPU:-1}"
 export BRICK_POINTER_SPEED="$POINTER"
 export BRICK_SCALE="$SCALE"
 export BRICK_WIN_W=$(awk -v s="$SCALE" 'BEGIN{printf "%d", 1024/s + 0.5}')

@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>scroll</title>
+<style>
+body{margin:0;font:16px/1.5 sans-serif;background:linear-gradient(#f4f6fb,#dde3f0)}
+.card{margin:14px;padding:14px;border-radius:12px;background:#fff;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+.card h2{margin:0 0 6px;background:linear-gradient(90deg,#3a6,#39c);-webkit-background-clip:text;color:transparent}
+.bar{height:10px;border-radius:5px;background:linear-gradient(90deg,#f90,#c3f)}
+</style>
+<body><script src="common.js"></script><script>
+var s='';for(var i=0;i<160;i++){s+='<div class="card"><h2>第 '+i+' 段 Section heading</h2><div class="bar" style="width:'+(20+i*7%80)+'%"></div><p>中文排版测试，滚动性能基准。The quick brown fox jumps over the lazy dog. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p></div>';}
+document.body.insertAdjacentHTML('beforeend',s);
+window.__bench=function(secs){var dir=1;return __probe(secs,function(){var y=scrollY;scrollBy(0,dir*12);if(scrollY===y)dir=-dir;});};
+</script>

@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>webgl</title>
+<body style="margin:0"><canvas id="c" width="1000" height="740"></canvas>
+<script src="common.js"></script><script>
+var gl=document.getElementById('c').getContext('webgl'),info={available:!!gl};
+if(gl){var e=gl.getExtension('WEBGL_debug_renderer_info');info.renderer=e?gl.getParameter(e.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+var vs=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(vs,'attribute vec2 p;uniform float t;void main(){float a=t+p.x*9.0;gl_Position=vec4(p.x+0.1*sin(a),p.y+0.1*cos(a),0,1);gl_PointSize=6.0;}');gl.compileShader(vs);
+var fs=gl.createShader(gl.FRAGMENT_SHADER);gl.shaderSource(fs,'precision mediump float;void main(){gl_FragColor=vec4(gl_PointCoord,0.8,1);}');gl.compileShader(fs);
+var pr=gl.createProgram();gl.attachShader(pr,vs);gl.attachShader(pr,fs);gl.linkProgram(pr);gl.useProgram(pr);
+var N=40000,a=new Float32Array(N*2);for(var i=0;i<N*2;i++)a[i]=Math.random()*2-1;
+gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());gl.bufferData(gl.ARRAY_BUFFER,a,gl.STATIC_DRAW);
+var loc=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);var tl=gl.getUniformLocation(pr,'t');}
+window.__bench=function(secs){if(!gl)return Promise.resolve(info);return __probe(secs,function(n){gl.clearColor(0,0,0.1,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.uniform1f(tl,n*0.02);gl.drawArrays(gl.POINTS,0,N);}).then(function(r){r.renderer=info.renderer;return r;});};
+</script>

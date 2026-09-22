@@ -1,0 +1,23 @@
+{
+    "file_format_version": "1.1.2",
+    "layer": {
+        "name": "VK_LAYER_BRICK_x11_wsi",
+        "type": "GLOBAL",
+        "library_path": "/opt/pvr/lib/libVkLayer_brick_x11_wsi.so",
+        "api_version": "1.3.225",
+        "implementation_version": "1",
+        "description": "X11 (xcb) surfaces and swapchains for a driver that only has headless and display WSI",
+        "functions": {
+            "vkGetInstanceProcAddr": "brick_GetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "brick_GetDeviceProcAddr"
+        },
+        "instance_extensions": [
+            { "name": "VK_KHR_xcb_surface", "spec_version": "6" }
+        ],
+        "device_extensions": [
+            { "name": "VK_KHR_incremental_present", "spec_version": "2", "entrypoints": [] }
+        ],
+        "enable_environment": { "BRICK_VK_X11_WSI": "1" },
+        "disable_environment": { "BRICK_VK_X11_WSI_DISABLE": "1" }
+    }
+}

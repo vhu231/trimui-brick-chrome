@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>canvas</title>
+<body style="margin:0"><canvas id="c" width="1000" height="740"></canvas>
+<script src="common.js"></script><script>
+var c=document.getElementById('c').getContext('2d');
+window.__bench=function(secs){return __probe(secs,function(n){
+  c.fillStyle='rgba(0,0,0,0.25)';c.fillRect(0,0,1000,740);
+  for(var i=0;i<600;i++){var x=(i*97+n*7)%1000,y=(i*61+n*5)%740;
+    c.fillStyle='hsla('+((i*7+n)%360)+',80%,60%,0.6)';c.beginPath();c.arc(x,y,6+i%14,0,6.283);c.fill();}
+  c.font='28px sans-serif';c.fillStyle='#fff';c.fillText('frame '+n,20,40);
+});};
+</script>

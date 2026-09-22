@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>anim</title>
+<style>
+body{margin:0;background:#123;overflow:hidden}
+.b{position:absolute;width:90px;height:90px;border-radius:18px;opacity:.85;
+   background:radial-gradient(circle at 30% 30%,#fff,#48f 40%,#214);box-shadow:0 0 18px #6af;
+   animation:spin 2.5s linear infinite}
+@keyframes spin{from{transform:rotate(0) scale(1)}50%{transform:rotate(180deg) scale(1.4)}to{transform:rotate(360deg) scale(1)}}
+</style>
+<body><script src="common.js"></script><script>
+for(var i=0;i<80;i++){var d=document.createElement('div');d.className='b';d.style.left=(i%10)*100+'px';d.style.top=Math.floor(i/10)*95+'px';d.style.animationDelay=(-i*0.13)+'s';document.body.appendChild(d);}
+window.__bench=function(secs){return __probe(secs);};
+</script>
