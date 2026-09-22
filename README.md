@@ -52,8 +52,22 @@
 | 手柄 | `/dev/input/event3`，以 Xbox 360 手柄（045e:028e）形式上报 |
 | 声卡 | `audiocodec`，采集 `hw:0,0` |
 
-**占用空间**：chroot 装完约 **1.3 GB**，放在 `/opt`（overlay 根分区，总共约 1.9 GB）。
+**存储分布**：
+
+| 路径 | 分区 | 文件系统 | 内容 |
+|---|---|---|---|
+| `/opt/brick-chrome` | overlay 根分区（`rootfs_data`） | ext4 | chroot 本体，约 1.5 GB |
+| `/mnt/UDISK/brick-chrome` | `UDISK`（4.5 GB） | ext4 | Chrome 的 profile 和缓存 |
+| `/mnt/SDCARD/Apps/Chrome` | SD 卡 | vfat | 图标、`launch.sh`、配置 |
+
 开工前根分区至少要有 1.5 GB 空闲。
+
+profile 和缓存**刻意不放在 chroot 里** —— 它们会一直长，而 chroot 在 overlay 根分区上，
+和原厂系统共用那 1.9 GB。`brick-x11.sh` 会在启动 Chrome 前把它们迁到 UDISK 并 bind mount
+回原路径，只做一次，之后幂等。
+
+也**刻意不放 SD 卡**：SD 卡是 vfat，没有 POSIX 权限也没有文件锁，
+Chrome 的 LevelDB 和 SQLite 存储在上面会出问题。
 
 **宿主机需要**：`ssh`、`scp`、`expect`、`curl`。掌机和电脑在同一局域网。
 
@@ -471,7 +485,15 @@ for (var i = event.resultIndex; i < event.results.length; i++)
 从结构上消除竞态。打完也**不要还原**成 NoSymbol —— 那是同一个竞态的反向版本，
 仍在队列里的按键会解析成"无符号"，末尾几个字会凭空消失。
 
-### 13. 高位 keycode 是浏览器功能键
+### 13. profile 会把 overlay 根分区撑满
+
+chroot 在 `/opt`，也就是 overlay 的上层分区，和原厂系统共用 1.9 GB。
+Chrome 的 profile 和缓存放在 chroot 里会一直长（实测 profile 140 MB + 缓存 86 MB），
+根分区一度只剩 417 MB。撑满 overlay 上层会影响整个系统，不只是 Chrome。
+
+搬到 `UDISK`（ext4，4.5 GB，原厂几乎没用）。不能搬 SD 卡 —— 那是 vfat。
+
+### 14. 高位 keycode 是浏览器功能键
 
 Chrome 判断快捷键看的是硬件 keycode 派生的 DomCode，**跟映射上去的 keysym 无关**。
 X keycode 166–180 对应 evdev 的 Back / Forward / Refresh，借用它们会直接让页面导航。

@@ -19,6 +19,33 @@ bind_once /dev
 bind_once /dev/pts
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
 
+# Chrome's profile and cache would otherwise grow inside the chroot, which sits
+# on the overlay root filesystem the stock system shares -- and that had got
+# down to a few hundred megabytes free.  Keep them on UDISK, which is ext4 with
+# room to spare.  Not the SD card: it is vfat, and Chrome's LevelDB and SQLite
+# stores need POSIX permissions and locking that vfat cannot give them.
+STORE=/mnt/UDISK/brick-chrome
+
+relocate() {
+    source=$STORE/$1
+    target=$ROOT$2
+    [ -d /mnt/UDISK ] || return 0
+    if [ ! -d "$source" ]; then
+        mkdir -p "$STORE" || return 0
+        if [ -d "$target" ] && ! grep -q " $target " /proc/mounts; then
+            mv "$target" "$source" || return 0
+        else
+            mkdir -p "$source"
+        fi
+        chown -R 1000:1000 "$source"
+    fi
+    mkdir -p "$target"
+    grep -q " $target " /proc/mounts || mount -o bind "$source" "$target"
+}
+
+relocate profile /home/brick/.config/brick-profile
+relocate cache   /home/brick/.cache
+
 xpid=
 padpid=
 cleanup() {

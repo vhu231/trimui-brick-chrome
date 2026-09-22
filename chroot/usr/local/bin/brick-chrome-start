@@ -12,12 +12,16 @@ WIN_H=${BRICK_WIN_H:-512}
 # default path, so the voice key needs the profile somewhere else.  Rename it
 # once rather than starting fresh, which would drop history, logins and the
 # microphone permissions already granted.
+# brick-x11.sh may already have made $PROFILE a mount point on UDISK, so test
+# for actual profile contents rather than for the directory, and copy rather
+# than rename -- a rename onto a mount point fails.
 PROFILE=/home/brick/.config/brick-profile
 DEFAULT=/home/brick/.config/google-chrome
-if [ ! -d "$PROFILE" ] && [ -d "$DEFAULT" ]; then
-    mv "$DEFAULT" "$PROFILE" && echo "migrated Chrome profile to $PROFILE"
-fi
 mkdir -p "$PROFILE"
+if [ -d "$DEFAULT" ] && [ ! -d "$PROFILE/Default" ]; then
+    cp -a "$DEFAULT"/. "$PROFILE"/ && rm -rf "$DEFAULT" \
+        && echo "migrated Chrome profile to $PROFILE"
+fi
 chown brick:brick "$PROFILE" 2>/dev/null || true
 
 # --window-size is in logical pixels, so it has to be divided by the scale
